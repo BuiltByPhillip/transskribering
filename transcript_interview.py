@@ -6,8 +6,10 @@ Transcribes audio files to text using OpenAI Whisper API
 Installation:
     pip install openai
     
-    For large files (>25MB), also install:
-    pip install pydub imageio-ffmpeg
+    For large files (>25MB):
+    brew install ffmpeg  (macOS)
+    apt install ffmpeg   (Linux)
+    choco install ffmpeg (Windows)
 
 Usage:
     python3 transcript_interview.py <audiofile> [api_key] [language]
@@ -16,13 +18,13 @@ Examples:
     python3 transcript_interview.py interview.mp3
     python3 transcript_interview.py interview.mp3 da
     python3 transcript_interview.py interview.mp3 --language danish
-    python3 transcript_interview.py large_file.m4a sk-KEY da
-
-Languages: en, da, es, fr, de, it, pt, nl, ru, ja, zh, etc.
 """
 
 import sys
 import os
+import subprocess
+import tempfile
+import shutil
 from pathlib import Path
 from io import BytesIO
 
@@ -30,128 +32,104 @@ MAX_CHUNK_SIZE_MB = 24
 DEFAULT_LANGUAGE = "en"
 
 LANGUAGE_ALIASES = {
-    "english": "en",
-    "danish": "da",
-    "spanish": "es",
-    "french": "fr",
-    "german": "de",
-    "italian": "it",
-    "portuguese": "pt",
-    "dutch": "nl",
-    "russian": "ru",
-    "japanese": "ja",
-    "chinese": "zh",
+    "english": "en", "danish": "da", "spanish": "es", "french": "fr",
+    "german": "de", "italian": "it", "portuguese": "pt", "dutch": "nl",
+    "russian": "ru", "japanese": "ja", "chinese": "zh",
 }
 
-def check_dependencies_for_large_file():
-    """Check if pydub and imageio-ffmpeg are installed, with helpful error message."""
+def check_ffmpeg():
+    """Check if ffmpeg is available."""
     try:
-        import pydub
-        import imageio_ffmpeg
+        subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=5)
         return True
-    except ImportError as e:
-        print(f"❌ Missing dependency: {e}")
-        print()
-        print("For large files (>25MB), install:")
-        print(f"  {sys.executable} -m pip install pydub imageio-ffmpeg")
-        print()
-        print("(Using the same Python that runs this script ensures compatibility)")
-        sys.exit(1)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
 
 def check_file(audio_file):
     """Check if file exists."""
     if not os.path.exists(audio_file):
         print(f"❌ Error: File '{audio_file}' not found.")
         sys.exit(1)
-    
-    file_size_mb = os.path.getsize(audio_file) / (1024 * 1024)
-    return file_size_mb
+    return os.path.getsize(audio_file) / (1024 * 1024)
 
 def normalize_language(lang):
-    """Convert language name to code, or validate code."""
+    """Convert language name to code."""
     if not lang:
         return DEFAULT_LANGUAGE
-    
     lang = lang.lower().strip()
-    
-    if lang in LANGUAGE_ALIASES:
-        return LANGUAGE_ALIASES[lang]
-    
-    if len(lang) == 2:
-        return lang
-    
-    print(f"⚠️  Unknown language: {lang}")
-    print(f"   Using default: {DEFAULT_LANGUAGE}")
-    return DEFAULT_LANGUAGE
+    return LANGUAGE_ALIASES.get(lang, lang if len(lang) == 2 else DEFAULT_LANGUAGE)
+
+def get_audio_duration(audio_file):
+    """Get audio duration in seconds using ffprobe."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1:nokey=1", audio_file],
+            capture_output=True, timeout=10, text=True
+        )
+        return float(result.stdout.strip())
+    except:
+        return None
 
 def split_audio_file(audio_file, max_size_mb=MAX_CHUNK_SIZE_MB):
-    """
-    Split audio file into chunks using pydub.
-    Returns list of BytesIO objects, or None if file is small enough.
-    """
+    """Split audio file using ffmpeg."""
     file_size_mb = os.path.getsize(audio_file) / (1024 * 1024)
     
     if file_size_mb <= max_size_mb:
         return None
     
-    # Check dependencies BEFORE trying to import
-    check_dependencies_for_large_file()
+    if not check_ffmpeg():
+        print("❌ ffmpeg not installed.")
+        print()
+        if sys.platform == "darwin":
+            print("Install with: brew install ffmpeg")
+        elif sys.platform == "linux":
+            print("Install with: apt install ffmpeg")
+        elif sys.platform == "win32":
+            print("Install with: choco install ffmpeg")
+        else:
+            print("Install ffmpeg for your system")
+        sys.exit(1)
     
-    from pydub import AudioSegment
-    import imageio_ffmpeg
-    
-    # Configure pydub to use imageio-ffmpeg
-    AudioSegment.converter = imageio_ffmpeg.get_ffmpeg_exe()
-    AudioSegment.ffprobe = imageio_ffmpeg.get_ffmpeg_exe()
-    
-    print(f"📊 File is {file_size_mb:.1f}MB - splitting into chunks...")
-    
-    # Load audio
-    audio = AudioSegment.from_file(audio_file)
-    total_duration_ms = len(audio)
+    duration = get_audio_duration(audio_file)
+    if not duration:
+        print("❌ Could not determine audio duration.")
+        sys.exit(1)
     
     # Calculate chunk duration
-    ms_per_mb = total_duration_ms / file_size_mb
-    chunk_duration_ms = int(ms_per_mb * max_size_mb * 0.9)
+    chunk_duration = (duration / file_size_mb) * max_size_mb * 0.9
     
+    print(f"📊 File is {file_size_mb:.1f}MB ({duration:.0f}s) - splitting into chunks...")
+    
+    temp_dir = tempfile.mkdtemp(prefix="audio_chunks_")
     chunks = []
     chunk_num = 1
-    start_ms = 0
+    start_time = 0
     
-    export_format = "mp3"
-    
-    while start_ms < total_duration_ms:
-        end_ms = min(start_ms + chunk_duration_ms, total_duration_ms)
-        chunk_audio = audio[start_ms:end_ms]
+    while start_time < duration:
+        end_time = min(start_time + chunk_duration, duration)
+        chunk_file = os.path.join(temp_dir, f"chunk_{chunk_num:03d}.mp3")
         
-        buffer = BytesIO()
-        chunk_audio.export(buffer, format=export_format)
-        buffer.seek(0)
+        # Use ffmpeg to extract chunk
+        subprocess.run(
+            ["ffmpeg", "-i", audio_file, "-ss", str(start_time), "-to", str(end_time),
+             "-q:a", "9", "-n", chunk_file],
+            capture_output=True, timeout=300
+        )
         
-        chunk_size_mb = len(buffer.getvalue()) / (1024 * 1024)
-        print(f"   Chunk {chunk_num}: {chunk_size_mb:.1f}MB ({(end_ms - start_ms) // 1000}s)")
+        if os.path.exists(chunk_file):
+            chunk_size = os.path.getsize(chunk_file) / (1024 * 1024)
+            print(f"   Chunk {chunk_num}: {chunk_size:.1f}MB ({end_time - start_time:.0f}s)")
+            chunks.append(chunk_file)
+            chunk_num += 1
         
-        buffer.name = f"chunk_{chunk_num:03d}.mp3"
-        chunks.append(buffer)
-        
-        start_ms = end_ms
-        chunk_num += 1
+        start_time = end_time
     
     print(f"✅ Split into {len(chunks)} chunks\n")
-    return chunks
+    return chunks, temp_dir
 
 def transcribe_with_whisper(audio_input, api_key=None, language=DEFAULT_LANGUAGE):
-    """
-    Transcribe audio to text using OpenAI Whisper API.
-    
-    Args:
-        audio_input: Either file path (str) or BytesIO object
-        api_key: OpenAI API key (or from OPENAI_API_KEY env var)
-        language: Language code
-    
-    Returns:
-        Transcribed text
-    """
+    """Transcribe using OpenAI Whisper."""
     try:
         from openai import OpenAI
     except ImportError:
@@ -162,58 +140,32 @@ def transcribe_with_whisper(audio_input, api_key=None, language=DEFAULT_LANGUAGE
     api_key = api_key or os.getenv("OPENAI_API_KEY")
     if not api_key:
         print("❌ OpenAI API key not found.")
-        print()
-        print("   Method 1 - As argument:")
-        print("     python3 transcript_interview.py interview.mp3 sk-YOUR_KEY_HERE")
-        print()
-        print("   Method 2 - As environment variable:")
-        print("     export OPENAI_API_KEY=sk-YOUR_KEY_HERE")
-        print("     python3 transcript_interview.py interview.mp3")
-        print()
-        print("   Get an API key at: https://platform.openai.com/api-keys")
+        print("   Set: export OPENAI_API_KEY=sk-YOUR_KEY_HERE")
         sys.exit(1)
     
     client = OpenAI(api_key=api_key)
     
-    if isinstance(audio_input, str):
-        filename = Path(audio_input).name
-        file_obj = open(audio_input, 'rb')
-        should_close = True
-    else:
-        filename = getattr(audio_input, 'name', 'audio.mp3')
-        file_obj = audio_input
-        should_close = False
-    
+    filename = Path(audio_input).name if isinstance(audio_input, str) else "audio.mp3"
     print(f"🎙️  Transcribing '{filename}' ({language.upper()})...")
     
     try:
-        transcript = client.audio.transcriptions.create(
-            model="whisper-1",
-            file=file_obj,
-            language=language,
-            response_format="text"
-        )
+        with open(audio_input, 'rb') as f:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=f,
+                language=language,
+                response_format="text"
+            )
         return transcript
     except Exception as e:
-        error_msg = str(e)
-        print(f"❌ Error from OpenAI API: {error_msg}")
-        if "invalid_api_key" in error_msg.lower() or "401" in error_msg:
-            print("   → Your API key is invalid.")
-        elif "insufficient_quota" in error_msg.lower() or "429" in error_msg:
-            print("   → Quota exceeded. Add payment method on OpenAI.")
+        print(f"❌ Error: {e}")
         raise
-    finally:
-        if should_close:
-            file_obj.close()
 
 def save_transcript(text, audio_file):
-    """Save transcription to a text file."""
-    audio_path = Path(audio_file).resolve()
-    output_file = audio_path.parent / (audio_path.stem + "_transcript.txt")
-    
+    """Save transcript to file."""
+    output_file = Path(audio_file).parent / (Path(audio_file).stem + "_transcript.txt")
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write(text)
-    
     return str(output_file)
 
 def main():
@@ -225,16 +177,10 @@ def main():
     api_key = None
     language = DEFAULT_LANGUAGE
     
-    # Parse arguments
     for i in range(2, len(sys.argv)):
         arg = sys.argv[i]
-        
         if arg.startswith("--language"):
-            if "=" in arg:
-                language = normalize_language(arg.split("=")[1])
-            elif i + 1 < len(sys.argv):
-                language = normalize_language(sys.argv[i + 1])
-                break
+            language = normalize_language(arg.split("=")[-1] if "=" in arg else (sys.argv[i+1] if i+1 < len(sys.argv) else ""))
         elif arg.startswith("sk-"):
             api_key = arg
         else:
@@ -243,18 +189,18 @@ def main():
     file_size_mb = check_file(audio_file)
     print(f"📁 File: {Path(audio_file).name} ({file_size_mb:.1f}MB)")
     
+    temp_dir = None
     try:
-        chunks = split_audio_file(audio_file)
+        result = split_audio_file(audio_file)
         
-        if chunks is not None:
+        if result:
+            chunks, temp_dir = result
             all_transcripts = []
-            for i, chunk_buffer in enumerate(chunks, 1):
+            for i, chunk_file in enumerate(chunks, 1):
                 print(f"Transcribing chunk {i}/{len(chunks)}...")
-                text = transcribe_with_whisper(chunk_buffer, api_key, language)
+                text = transcribe_with_whisper(chunk_file, api_key, language)
                 all_transcripts.append(text)
-                chunk_buffer.close()
                 print(f"  ✓ Chunk {i} done\n")
-            
             full_text = "\n\n".join(all_transcripts)
         else:
             full_text = transcribe_with_whisper(audio_file, api_key, language)
@@ -266,17 +212,15 @@ def main():
         print(f"📊 Length: {len(full_text)} characters, ~{len(full_text.split())} words")
         print()
         print("--- TRANSCRIPT ---")
-        print()
         print(full_text)
-        print()
         print("--- END ---")
         
     except KeyboardInterrupt:
-        print("\n⚠️  Interrupted by user.")
+        print("\n⚠️  Interrupted.")
         sys.exit(1)
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        sys.exit(1)
+    finally:
+        if temp_dir and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
 
 if __name__ == "__main__":
     main()
