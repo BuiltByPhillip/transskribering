@@ -1,6 +1,6 @@
 # Interview Transcription Script
 
-Automatisk transkripsjon af audio-interviews til dansk tekst.
+Automatic transcription of audio interviews to English text using OpenAI Whisper API.
 
 ## Installation
 
@@ -8,48 +8,48 @@ Automatisk transkripsjon af audio-interviews til dansk tekst.
 pip install openai
 ```
 
-Det er alt. Seriøst.
+That's it. Seriously.
 
-## Brug
+## Usage
 
 ```bash
 python3 transcript_interview.py interview.mp3
 ```
 
-Eller med API key direkte:
+Or with API key directly:
 ```bash
 python3 transcript_interview.py interview.mp3 sk-YOUR_API_KEY_HERE
 ```
 
-## Miljøvariabel (mere sikkert)
+## Environment Variable (more secure)
 
 ```bash
 export OPENAI_API_KEY=sk-YOUR_API_KEY_HERE
 python3 transcript_interview.py interview.mp3
 ```
 
-Få din API key her: https://platform.openai.com/api-keys
+Get your API key here: https://platform.openai.com/api-keys
 
-## Filformater
+## Supported Formats
 
-MP3, WAV, FLAC, OGG, M4A, WEBM — alt som Whisper API understøtter.
+MP3, WAV, FLAC, OGG, M4A, WEBM — anything Whisper API supports.
 
-## Store filer
+## Large Files
 
-Filer større end 25MB bliver automatisk delt op og transkriberet i dele. Du får én tekstfil.
+Files larger than 25MB are automatically split and transcribed in chunks. You get one transcript file.
 
 ```bash
-# Virker med 100MB+ filer
+# Works with 100MB+ files
 python3 transcript_interview.py huge_recording.mp3
 ```
 
 ## Output
 
-Scriptet gemmer transkriptionen som `[filnavn]_transcript.txt`.
+The script saves the transcription as `[filename]_transcript.txt`.
 
-## Pris
+## Pricing
 
-Whisper API koster ca. 0,02 USD per minut audio. En time koster ~$1.20.
+Whisper API costs ~$0.02 per minute of audio. One hour costs ~$1.20.
 
 ---
 
