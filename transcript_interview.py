@@ -5,29 +5,28 @@ Transcribes audio files to text using OpenAI Whisper API
 
 Installation:
     pip install openai
+    
+    For large files (>25MB), also install:
+    pip install pydub imageio-ffmpeg
 
 Usage:
-    python3 transcript_interview.py <audiofile.mp3> [api_key] [language]
-    
+    python3 transcript_interview.py <audiofile> [api_key] [language]
+
 Examples:
     python3 transcript_interview.py interview.mp3
-    python3 transcript_interview.py interview.mp3 sk-YOUR_KEY_HERE
-    python3 transcript_interview.py interview.mp3 sk-YOUR_KEY_HERE en
-    python3 transcript_interview.py interview.mp3 --language da
-    python3 transcript_interview.py interview.mp3 --language es
+    python3 transcript_interview.py interview.mp3 da
+    python3 transcript_interview.py interview.mp3 --language danish
+    python3 transcript_interview.py large_file.m4a sk-KEY da
 
-Supported formats: MP3, WAV, FLAC, OGG, M4A, WEBM
-Works with files of any size.
-
-Languages: en (English), da (Danish), es (Spanish), fr (French), de (German), etc.
-See: https://github.com/openai/whisper/blob/main/whisper/tokenizer.py
+Languages: en, da, es, fr, de, it, pt, nl, ru, ja, zh, etc.
 """
 
 import sys
 import os
 from pathlib import Path
+from io import BytesIO
 
-MAX_FILE_SIZE_MB = 24  # OpenAI limit is 25MB, but use 24 to be safe
+MAX_CHUNK_SIZE_MB = 24  # OpenAI limit is 25MB, use 24 for safety
 DEFAULT_LANGUAGE = "en"
 
 # Common language codes
@@ -44,6 +43,17 @@ LANGUAGE_ALIASES = {
     "japanese": "ja",
     "chinese": "zh",
 }
+
+def setup_ffmpeg():
+    """Configure pydub to use imageio-ffmpeg's bundled ffmpeg."""
+    try:
+        import imageio_ffmpeg
+        from pydub import AudioSegment
+        AudioSegment.converter = imageio_ffmpeg.get_ffmpeg_exe()
+        AudioSegment.ffprobe = imageio_ffmpeg.get_ffmpeg_exe().replace('ffmpeg', 'ffprobe')
+        return True
+    except ImportError:
+        return False
 
 def check_file(audio_file):
     """Check if file exists."""
@@ -70,54 +80,82 @@ def normalize_language(lang):
         return lang
     
     print(f"⚠️  Unknown language: {lang}")
-    print(f"   Using default: {DEFAULT_LANGUAGE}")
+    print(f"    Using default: {DEFAULT_LANGUAGE}")
     return DEFAULT_LANGUAGE
 
-def split_audio_file(audio_file, max_size_mb=MAX_FILE_SIZE_MB):
+def split_audio_file(audio_file, max_size_mb=MAX_CHUNK_SIZE_MB):
     """
-    Split audio file into byte-chunks if larger than max_size_mb.
-    Handles file as binary - no decoding needed.
+    Split audio file into chunks if larger than max_size_mb.
+    Uses pydub for proper audio decoding/encoding.
     
     Returns:
-        List of byte-chunks, or None if file is small enough
+        List of BytesIO objects, or None if file is small enough
     """
     file_size_mb = os.path.getsize(audio_file) / (1024 * 1024)
     
     if file_size_mb <= max_size_mb:
         return None
     
-    chunk_size_bytes = max_size_mb * 1024 * 1024
+    # Check if pydub is available
+    if not setup_ffmpeg():
+        print("❌ Large file detected but pydub/imageio-ffmpeg not installed.")
+        print("   Install with: pip install pydub imageio-ffmpeg")
+        sys.exit(1)
+    
+    from pydub import AudioSegment
+    
+    print(f"📊 File is {file_size_mb:.1f}MB - splitting into chunks...")
+    
+    # Load audio
+    audio = AudioSegment.from_file(audio_file)
+    total_duration_ms = len(audio)
+    
+    # Calculate chunk duration based on file size ratio
+    # Estimate: if X MB = Y ms, then max_size_mb = (Y/X) * max_size_mb ms
+    ms_per_mb = total_duration_ms / file_size_mb
+    chunk_duration_ms = int(ms_per_mb * max_size_mb * 0.9)  # 0.9 for safety margin
+    
     chunks = []
+    chunk_num = 1
+    start_ms = 0
     
-    print(f"📊 File is {file_size_mb:.1f}MB - splitting into {max_size_mb}MB chunks...")
+    original_ext = Path(audio_file).suffix.lower()
+    export_format = "mp3"  # Always export as MP3 for compatibility
     
-    with open(audio_file, 'rb') as f:
-        chunk_num = 1
-        while True:
-            chunk = f.read(chunk_size_bytes)
-            if not chunk:
-                break
-            chunks.append(chunk)
-            print(f"   Chunk {chunk_num}: {len(chunk) / (1024 * 1024):.1f}MB")
-            chunk_num += 1
+    while start_ms < total_duration_ms:
+        end_ms = min(start_ms + chunk_duration_ms, total_duration_ms)
+        chunk_audio = audio[start_ms:end_ms]
+        
+        # Export to BytesIO
+        buffer = BytesIO()
+        chunk_audio.export(buffer, format=export_format)
+        buffer.seek(0)
+        
+        chunk_size_mb = len(buffer.getvalue()) / (1024 * 1024)
+        print(f"   Chunk {chunk_num}: {chunk_size_mb:.1f}MB ({(end_ms - start_ms) // 1000}s)")
+        
+        # Give it a filename for Whisper format detection
+        buffer.name = f"chunk_{chunk_num:03d}.mp3"
+        chunks.append(buffer)
+        
+        start_ms = end_ms
+        chunk_num += 1
     
     print(f"✅ Split into {len(chunks)} chunks\n")
     return chunks
 
-def transcribe_with_whisper(audio_data, filename, api_key=None, language=DEFAULT_LANGUAGE):
+def transcribe_with_whisper(audio_input, api_key=None, language=DEFAULT_LANGUAGE):
     """
     Transcribe audio to text using OpenAI Whisper API.
     
     Args:
-        audio_data: Either file path (str) or byte data
-        filename: Name of the file (for display + Whisper format detection)
+        audio_input: Either file path (str) or BytesIO object
         api_key: OpenAI API key (or from OPENAI_API_KEY env var)
-        language: Language code (default: "en" for English)
+        language: Language code
     
     Returns:
         Transcribed text
     """
-    
     try:
         from openai import OpenAI
     except ImportError:
@@ -125,60 +163,55 @@ def transcribe_with_whisper(audio_data, filename, api_key=None, language=DEFAULT
         print("   Install with: pip install openai")
         sys.exit(1)
     
-    # Get API key
     api_key = api_key or os.getenv("OPENAI_API_KEY")
     if not api_key:
         print("❌ OpenAI API key not found.")
         print()
         print("   Method 1 - As argument:")
-        print(f"     python3 transcript_interview.py interview.mp3 sk-YOUR_KEY_HERE")
+        print("     python3 transcript_interview.py interview.mp3 sk-YOUR_KEY_HERE")
         print()
         print("   Method 2 - As environment variable:")
         print("     export OPENAI_API_KEY=sk-YOUR_KEY_HERE")
-        print(f"     python3 transcript_interview.py interview.mp3")
+        print("     python3 transcript_interview.py interview.mp3")
         print()
         print("   Get an API key at: https://platform.openai.com/api-keys")
         sys.exit(1)
     
     client = OpenAI(api_key=api_key)
     
-    print(f"🎙️  Transcribing '{filename}' to {language.upper()}...")
+    # Determine filename for display
+    if isinstance(audio_input, str):
+        filename = Path(audio_input).name
+        file_obj = open(audio_input, 'rb')
+        should_close = True
+    else:
+        filename = getattr(audio_input, 'name', 'audio.mp3')
+        file_obj = audio_input
+        should_close = False
+    
+    print(f"🎙️ Transcribing '{filename}' ({language.upper()})...")
     
     try:
-        # If audio_data is bytes, wrap in BytesIO
-        if isinstance(audio_data, bytes):
-            from io import BytesIO
-            audio_file = BytesIO(audio_data)
-            audio_file.name = filename  # Whisper uses filename for format detection
-        else:
-            audio_file = open(audio_data, 'rb')
-        
         transcript = client.audio.transcriptions.create(
             model="whisper-1",
-            file=audio_file,
+            file=file_obj,
             language=language,
             response_format="text"
         )
-        
-        if isinstance(audio_data, bytes):
-            audio_file.close()
-        else:
-            audio_file.close()
-        
         return transcript
-        
     except Exception as e:
         error_msg = str(e)
         print(f"❌ Error from OpenAI API: {error_msg}")
         if "invalid_api_key" in error_msg.lower() or "401" in error_msg:
-            print("   → Your API key is invalid. Check that it's correct.")
+            print("   → Your API key is invalid.")
         elif "insufficient_quota" in error_msg.lower() or "429" in error_msg:
-            print("   → You've used your free quota. Add a payment method on OpenAI.")
-        elif "413" in error_msg or "content size" in error_msg.lower():
-            print("   → Chunk is too large. Try re-running (file will be split smaller).")
-        elif "file" in error_msg.lower() and "format" in error_msg.lower():
-            print("   → File format not supported. Try converting to MP3.")
+            print("   → Quota exceeded. Add payment method on OpenAI.")
+        elif "413" in error_msg:
+            print("   → File too large. This shouldn't happen with chunking.")
         raise
+    finally:
+        if should_close:
+            file_obj.close()
 
 def save_transcript(text, audio_file):
     """Save transcription to a text file in the same directory as the audio file."""
@@ -226,20 +259,18 @@ def main():
         chunks = split_audio_file(audio_file)
         
         if chunks is not None:
-            # File was too large - transcribe chunks
+            # Transcribe each chunk
             all_transcripts = []
-            for i, chunk_data in enumerate(chunks, 1):
+            for i, chunk_buffer in enumerate(chunks, 1):
                 print(f"Transcribing chunk {i}/{len(chunks)}...")
-                text = transcribe_with_whisper(chunk_data, Path(audio_file).name, api_key, language)
+                text = transcribe_with_whisper(chunk_buffer, api_key, language)
                 all_transcripts.append(text)
+                chunk_buffer.close()
                 print(f"  ✓ Chunk {i} done\n")
             
-            # Combine transcriptions with spacing
             full_text = "\n\n".join(all_transcripts)
         else:
-            # File was small enough - transcribe directly
-            print()
-            full_text = transcribe_with_whisper(audio_file, Path(audio_file).name, api_key, language)
+            full_text = transcribe_with_whisper(audio_file, api_key, language)
         
         output_file = save_transcript(full_text, audio_file)
         
@@ -254,7 +285,7 @@ def main():
         print("--- END ---")
         
     except KeyboardInterrupt:
-        print("\n⚠️  Interrupted by user.")
+        print("\n⚠️ Interrupted by user.")
         sys.exit(1)
     except Exception as e:
         print(f"❌ Unexpected error: {e}")
