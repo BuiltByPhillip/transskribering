@@ -27,7 +27,7 @@ import sys
 import os
 from pathlib import Path
 
-MAX_FILE_SIZE_MB = 25
+MAX_FILE_SIZE_MB = 24  # OpenAI limit is 25MB, but use 24 to be safe
 DEFAULT_LANGUAGE = "en"
 
 # Common language codes
@@ -174,6 +174,8 @@ def transcribe_with_whisper(audio_data, filename, api_key=None, language=DEFAULT
             print("   → Your API key is invalid. Check that it's correct.")
         elif "insufficient_quota" in error_msg.lower() or "429" in error_msg:
             print("   → You've used your free quota. Add a payment method on OpenAI.")
+        elif "413" in error_msg or "content size" in error_msg.lower():
+            print("   → Chunk is too large. Try re-running (file will be split smaller).")
         elif "file" in error_msg.lower() and "format" in error_msg.lower():
             print("   → File format not supported. Try converting to MP3.")
         raise
