@@ -49,10 +49,13 @@ def setup_ffmpeg():
     try:
         import imageio_ffmpeg
         from pydub import AudioSegment
-        AudioSegment.converter = imageio_ffmpeg.get_ffmpeg_exe()
-        AudioSegment.ffprobe = imageio_ffmpeg.get_ffmpeg_exe().replace('ffmpeg', 'ffprobe')
+        
+        ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+        AudioSegment.converter = ffmpeg_path
+        AudioSegment.ffprobe = ffmpeg_path
         return True
-    except ImportError:
+    except Exception as e:
+        print(f"Debug: setup_ffmpeg failed: {e}")
         return False
 
 def check_file(audio_file):
