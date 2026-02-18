@@ -58,3 +58,7 @@ MP3, WAV, FLAC, OGG, M4A, WEBM — anything ffmpeg handles.
 ## Pricing
 
 ~$0.02/minute. One hour ≈ $1.20.
+
+---
+
+Made with Claude AI
