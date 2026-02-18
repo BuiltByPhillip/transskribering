@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
 """
 Interview Transcription Script
-Transcribes audio files to English text using OpenAI Whisper API
+Transcribes audio files to text using OpenAI Whisper API
 
 Installation:
     pip install openai
 
 Usage:
-    python3 transcript_interview.py <audiofile.mp3> [openai_api_key]
+    python3 transcript_interview.py <audiofile.mp3> [api_key] [language]
     
-Example:
+Examples:
     python3 transcript_interview.py interview.mp3
-    python3 transcript_interview.py huge_100mb_recording.mp3  # Auto-split if >25MB
+    python3 transcript_interview.py interview.mp3 sk-YOUR_KEY_HERE
+    python3 transcript_interview.py interview.mp3 sk-YOUR_KEY_HERE en
+    python3 transcript_interview.py interview.mp3 --language da
+    python3 transcript_interview.py interview.mp3 --language es
 
 Supported formats: MP3, WAV, FLAC, OGG, M4A, WEBM
 Works with files of any size.
+
+Languages: en (English), da (Danish), es (Spanish), fr (French), de (German), etc.
+See: https://github.com/openai/whisper/blob/main/whisper/tokenizer.py
 """
 
 import sys
@@ -22,6 +28,22 @@ import os
 from pathlib import Path
 
 MAX_FILE_SIZE_MB = 25
+DEFAULT_LANGUAGE = "en"
+
+# Common language codes
+LANGUAGE_ALIASES = {
+    "english": "en",
+    "danish": "da",
+    "spanish": "es",
+    "french": "fr",
+    "german": "de",
+    "italian": "it",
+    "portuguese": "pt",
+    "dutch": "nl",
+    "russian": "ru",
+    "japanese": "ja",
+    "chinese": "zh",
+}
 
 def check_file(audio_file):
     """Check if file exists."""
@@ -31,6 +53,25 @@ def check_file(audio_file):
     
     file_size_mb = os.path.getsize(audio_file) / (1024 * 1024)
     return file_size_mb
+
+def normalize_language(lang):
+    """Convert language name to code, or validate code."""
+    if not lang:
+        return DEFAULT_LANGUAGE
+    
+    lang = lang.lower().strip()
+    
+    # Check if it's an alias
+    if lang in LANGUAGE_ALIASES:
+        return LANGUAGE_ALIASES[lang]
+    
+    # If it's already a code (2 letters), return it
+    if len(lang) == 2:
+        return lang
+    
+    print(f"⚠️  Unknown language: {lang}")
+    print(f"   Using default: {DEFAULT_LANGUAGE}")
+    return DEFAULT_LANGUAGE
 
 def split_audio_file(audio_file, max_size_mb=MAX_FILE_SIZE_MB):
     """
@@ -63,7 +104,7 @@ def split_audio_file(audio_file, max_size_mb=MAX_FILE_SIZE_MB):
     print(f"✅ Split into {len(chunks)} chunks\n")
     return chunks
 
-def transcribe_with_whisper(audio_data, filename, api_key=None, language="en"):
+def transcribe_with_whisper(audio_data, filename, api_key=None, language=DEFAULT_LANGUAGE):
     """
     Transcribe audio to text using OpenAI Whisper API.
     
@@ -71,7 +112,7 @@ def transcribe_with_whisper(audio_data, filename, api_key=None, language="en"):
         audio_data: Either file path (str) or byte data
         filename: Name of the file (for display + Whisper format detection)
         api_key: OpenAI API key (or from OPENAI_API_KEY env var)
-        language: Language code (default: "en" for English, "da" for Danish)
+        language: Language code (default: "en" for English)
     
     Returns:
         Transcribed text
@@ -101,7 +142,7 @@ def transcribe_with_whisper(audio_data, filename, api_key=None, language="en"):
     
     client = OpenAI(api_key=api_key)
     
-    print(f"🎙️  Transcribing '{filename}'...")
+    print(f"🎙️  Transcribing '{filename}' to {language.upper()}...")
     
     try:
         # If audio_data is bytes, wrap in BytesIO
@@ -153,7 +194,26 @@ def main():
         sys.exit(1)
     
     audio_file = sys.argv[1]
-    api_key = sys.argv[2] if len(sys.argv) > 2 else None
+    api_key = None
+    language = DEFAULT_LANGUAGE
+    
+    # Parse remaining arguments
+    for i in range(2, len(sys.argv)):
+        arg = sys.argv[i]
+        
+        # Check if it's a language flag
+        if arg.startswith("--language"):
+            if "=" in arg:
+                language = normalize_language(arg.split("=")[1])
+            elif i + 1 < len(sys.argv):
+                language = normalize_language(sys.argv[i + 1])
+                break
+        # Check if it looks like an API key
+        elif arg.startswith("sk-"):
+            api_key = arg
+        # Otherwise treat as language code
+        else:
+            language = normalize_language(arg)
     
     # Check file first
     file_size_mb = check_file(audio_file)
@@ -168,7 +228,7 @@ def main():
             all_transcripts = []
             for i, chunk_data in enumerate(chunks, 1):
                 print(f"Transcribing chunk {i}/{len(chunks)}...")
-                text = transcribe_with_whisper(chunk_data, Path(audio_file).name, api_key)
+                text = transcribe_with_whisper(chunk_data, Path(audio_file).name, api_key, language)
                 all_transcripts.append(text)
                 print(f"  ✓ Chunk {i} done\n")
             
@@ -177,7 +237,7 @@ def main():
         else:
             # File was small enough - transcribe directly
             print()
-            full_text = transcribe_with_whisper(audio_file, Path(audio_file).name, api_key)
+            full_text = transcribe_with_whisper(audio_file, Path(audio_file).name, api_key, language)
         
         output_file = save_transcript(full_text, audio_file)
         
