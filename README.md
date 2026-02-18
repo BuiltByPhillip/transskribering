@@ -5,15 +5,14 @@ Transcribe audio interviews to text using OpenAI Whisper API.
 ## Installation
 
 ```bash
+# Python packages
 pip install openai
-```
 
-For large files (>25MB):
-```bash
-pip install openai pydub imageio-ffmpeg
+# For large files (>25MB), also install ffmpeg
+brew install ffmpeg      # macOS
+apt install ffmpeg       # Linux
+choco install ffmpeg     # Windows
 ```
-
-All dependencies install via pip. No manual ffmpeg installation needed.
 
 ## Usage
 
@@ -34,23 +33,27 @@ python3 transcript_interview.py interview.mp3
 
 ## Language
 
-Default is English. Specify language with code or name:
+Default is English. Specify with code or name:
 
 ```bash
-python3 transcript_interview.py interview.mp3 da
+python3 transcript_interview.py interview.mp3 da           # Danish
 python3 transcript_interview.py interview.mp3 --language danish
-python3 transcript_interview.py interview.mp3 sk-KEY es
+python3 transcript_interview.py interview.mp3 sk-KEY es    # Spanish
 ```
 
 Supported: en, da, es, fr, de, it, pt, nl, ru, ja, zh, sv, and more.
 
 ## Large Files
 
-Files >25MB are automatically split and transcribed in chunks. Requires pydub + imageio-ffmpeg.
+Files >25MB are automatically split and transcribed. Requires ffmpeg.
+
+```bash
+python3 transcript_interview.py huge_file.m4a da
+```
 
 ## Supported Formats
 
-MP3, WAV, FLAC, OGG, M4A, WEBM
+MP3, WAV, FLAC, OGG, M4A, WEBM — anything ffmpeg handles.
 
 ## Pricing
 
