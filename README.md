@@ -1,6 +1,6 @@
 # Interview Transcription Script
 
-Automatic transcription of audio interviews to any language using OpenAI Whisper API.
+Transcribe audio interviews to text using OpenAI Whisper API.
 
 ## Installation
 
@@ -8,7 +8,12 @@ Automatic transcription of audio interviews to any language using OpenAI Whisper
 pip install openai
 ```
 
-That's it. Seriously.
+For large files (>25MB):
+```bash
+pip install openai pydub imageio-ffmpeg
+```
+
+All dependencies install via pip. No manual ffmpeg installation needed.
 
 ## Usage
 
@@ -16,73 +21,40 @@ That's it. Seriously.
 python3 transcript_interview.py interview.mp3
 ```
 
-With environment variable (more secure):
+With API key:
 ```bash
-export OPENAI_API_KEY=sk-YOUR_API_KEY_HERE
+python3 transcript_interview.py interview.mp3 sk-YOUR_KEY
+```
+
+Or use environment variable:
+```bash
+export OPENAI_API_KEY=sk-YOUR_KEY
 python3 transcript_interview.py interview.mp3
 ```
 
-With API key directly:
-```bash
-python3 transcript_interview.py interview.mp3 sk-YOUR_API_KEY_HERE
-```
+## Language
 
-Get your API key here: https://platform.openai.com/api-keys
-
-## Language Support
-
-Default language is English. Specify any language using 2-letter codes or common names:
+Default is English. Specify language with code or name:
 
 ```bash
-# Using language code
-python3 transcript_interview.py interview.mp3 da       # Danish
-python3 transcript_interview.py interview.mp3 es       # Spanish
-python3 transcript_interview.py interview.mp3 fr       # French
-
-# Using --language flag
+python3 transcript_interview.py interview.mp3 da
 python3 transcript_interview.py interview.mp3 --language danish
-python3 transcript_interview.py interview.mp3 --language spanish
-python3 transcript_interview.py interview.mp3 --language=de
-
-# With API key and language
-python3 transcript_interview.py interview.mp3 sk-YOUR_KEY_HERE da
+python3 transcript_interview.py interview.mp3 sk-KEY es
 ```
 
-### Supported Languages
-
-| Code | Name | Code | Name |
-|------|------|------|------|
-| en | English | de | German |
-| da | Danish | es | Spanish |
-| fr | French | it | Italian |
-| pt | Portuguese | nl | Dutch |
-| ru | Russian | ja | Japanese |
-| zh | Chinese | sv | Swedish |
-
-(All language codes supported by OpenAI Whisper work)
-
-## Supported Formats
-
-MP3, WAV, FLAC, OGG, M4A, WEBM — anything Whisper API supports.
+Supported: en, da, es, fr, de, it, pt, nl, ru, ja, zh, sv, and more.
 
 ## Large Files
 
-Files larger than 25MB are automatically split and transcribed in chunks. You get one transcript file.
+Files >25MB are automatically split and transcribed in chunks. Requires pydub + imageio-ffmpeg.
 
-```bash
-# Works with 100MB+ files
-python3 transcript_interview.py huge_recording.mp3
-python3 transcript_interview.py huge_recording_danish.mp3 da
-```
+## Supported Formats
 
-## Output
-
-The script saves the transcription as `[filename]_transcript.txt`.
+MP3, WAV, FLAC, OGG, M4A, WEBM
 
 ## Pricing
 
-Whisper API costs ~$0.02 per minute of audio. One hour costs ~$1.20.
+~$0.02/minute. One hour ≈ $1.20.
 
 ---
-
 Made by Rune 🎙️
