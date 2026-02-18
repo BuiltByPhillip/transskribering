@@ -4,7 +4,7 @@ Interview Transcription Script
 Transkriberer audio-filer til dansk tekst ved hjælp af OpenAI Whisper API
 
 Installation:
-    pip install openai
+    pip install openai pydub
 
 Brug:
     python3 transcript_interview.py <audiofile.wav> [openai_api_key]
@@ -12,32 +12,101 @@ Brug:
 Eksempel:
     python3 transcript_interview.py interview.wav
     python3 transcript_interview.py interview.mp3 sk-...
+    python3 transcript_interview.py huge_recording.mp3  # Auto-split hvis >25MB
 
 Understøttede formater: MP3, WAV, FLAC, OGG, M4A, WEBM
-Max filstørrelse: 25MB
+Støtter nu automatisk splitting af filer >25MB
 """
 
 import sys
 import os
 from pathlib import Path
+import tempfile
+import shutil
 
 MAX_FILE_SIZE_MB = 25
 
 def check_file(audio_file):
-    """Tjekker om filen eksisterer og er inden for størrelsesbegrænsning."""
+    """Tjekker om filen eksisterer."""
     if not os.path.exists(audio_file):
         print(f"❌ Fejl: Filen '{audio_file}' findes ikke.")
         print(f"   Tip: Brug fuldt path, fx: python3 transcript_interview.py /Users/dig/Desktop/interview.mp3")
         sys.exit(1)
     
     file_size_mb = os.path.getsize(audio_file) / (1024 * 1024)
-    if file_size_mb > MAX_FILE_SIZE_MB:
-        print(f"❌ Fejl: Filen er for stor ({file_size_mb:.1f}MB).")
-        print(f"   OpenAI Whisper API understøtter max {MAX_FILE_SIZE_MB}MB.")
-        print(f"   Tip: Komprimer filen eller split den i mindre dele.")
+    return file_size_mb
+
+def split_audio(audio_file, max_size_mb=MAX_FILE_SIZE_MB):
+    """
+    Splitter audio-fil i mindre chunks hvis den er større end max_size_mb.
+    Bruger pydub til at læse filen og dele den op.
+    
+    Returns:
+        Liste af chunk-filer (stier), eller None hvis filen er lille nok
+    """
+    try:
+        from pydub import AudioSegment
+    except ImportError:
+        print("❌ pydub ikke installeret. Kan ikke splitte store filer.")
+        print("   Installer med: pip install pydub")
+        print("   (Kræver også ffmpeg: brew install ffmpeg på Mac, apt install ffmpeg på Linux)")
         sys.exit(1)
     
-    return file_size_mb
+    file_size_mb = os.path.getsize(audio_file) / (1024 * 1024)
+    
+    if file_size_mb <= max_size_mb:
+        print(f"✓ Filstørrelse OK ({file_size_mb:.1f}MB)")
+        return None
+    
+    print(f"📊 Fil er {file_size_mb:.1f}MB - splitter i {max_size_mb}MB chunks...")
+    
+    try:
+        # Detektér format baseret på filendelse
+        audio = AudioSegment.from_file(audio_file)
+        total_duration_ms = len(audio)
+        
+        # Beregn hvor meget vi kan have per chunk (baseret på filstørrelse)
+        bytes_per_chunk = max_size_mb * 1024 * 1024
+        chunk_duration_ms = int((total_duration_ms / os.path.getsize(audio_file)) * bytes_per_chunk)
+        
+        chunks = []
+        temp_dir = tempfile.mkdtemp(prefix="audio_chunks_")
+        
+        print(f"   Samlet længde: {total_duration_ms // 1000} sekunder")
+        print(f"   Chunk længde: ~{chunk_duration_ms // 1000} sekunder")
+        
+        chunk_num = 1
+        start_ms = 0
+        
+        while start_ms < total_duration_ms:
+            end_ms = min(start_ms + chunk_duration_ms, total_duration_ms)
+            chunk = audio[start_ms:end_ms]
+            
+            # Bestem output-format baseret på input
+            ext = Path(audio_file).suffix.lower()
+            if ext in ['.wav', '.mp3', '.flac', '.ogg', '.m4a', '.webm']:
+                output_format = ext[1:]  # Fjern punktum
+            else:
+                output_format = 'mp3'
+            
+            chunk_file = os.path.join(temp_dir, f"chunk_{chunk_num:03d}{ext}")
+            chunk.export(chunk_file, format=output_format)
+            chunks.append(chunk_file)
+            
+            chunk_size_mb = os.path.getsize(chunk_file) / (1024 * 1024)
+            print(f"   Chunk {chunk_num}: {chunk_size_mb:.1f}MB ({(end_ms - start_ms) // 1000}s)")
+            
+            start_ms = end_ms
+            chunk_num += 1
+        
+        return chunks, temp_dir
+        
+    except Exception as e:
+        print(f"❌ Fejl ved splitting: {e}")
+        print("   Sørg for at ffmpeg er installeret:")
+        print("   - Mac: brew install ffmpeg")
+        print("   - Linux: apt install ffmpeg")
+        sys.exit(1)
 
 def transcribe_with_whisper(audio_file, api_key=None):
     """
@@ -79,10 +148,8 @@ def transcribe_with_whisper(audio_file, api_key=None):
     
     client = OpenAI(api_key=api_key)
     
-    print(f"🎙️  Transkriberer '{Path(audio_file).name}' til dansk...")
+    print(f"🎙️  Transkriberer '{Path(audio_file).name}'...")
     print(f"   Filstørrelse: {file_size:.1f}MB")
-    print(f"   Estimeret tid: {max(1, int(file_size * 2))} sekunder")
-    print()
     
     try:
         with open(audio_file, "rb") as f:
@@ -102,7 +169,7 @@ def transcribe_with_whisper(audio_file, api_key=None):
             print("   → Du har brugt din gratis kvote. Tilføj betalingsmetode på OpenAI.")
         elif "file" in error_msg.lower() and "format" in error_msg.lower():
             print("   → Filformatet understøttes ikke. Prøv at konvertere til MP3.")
-        sys.exit(1)
+        raise
 
 def save_transcript(text, audio_file):
     """Gemmer transkription til en tekstfil i samme mappe som audio-filen."""
@@ -122,20 +189,45 @@ def main():
     audio_file = sys.argv[1]
     api_key = sys.argv[2] if len(sys.argv) > 2 else None
     
-    # Tjek fil først (før vi prøver at importere openai)
-    check_file(audio_file)
+    # Tjek fil først
+    file_size_mb = check_file(audio_file)
+    print(f"📁 Fil: {Path(audio_file).name} ({file_size_mb:.1f}MB)")
+    
+    temp_dir = None
+    chunks = None
     
     try:
-        text = transcribe_with_whisper(audio_file, api_key)
-        output_file = save_transcript(text, audio_file)
+        # Check if file needs splitting
+        split_result = split_audio(audio_file)
         
-        print(f"✅ Transkription færdig!")
+        if split_result is not None:
+            chunks, temp_dir = split_result
+            print(f"✅ Split i {len(chunks)} chunks\n")
+            
+            # Transcribe each chunk
+            all_transcripts = []
+            for i, chunk_file in enumerate(chunks, 1):
+                print(f"Transkriberer chunk {i}/{len(chunks)}...")
+                text = transcribe_with_whisper(chunk_file, api_key)
+                all_transcripts.append(text)
+                print(f"  ✓ Chunk {i} færdig\n")
+            
+            # Combine transcripts with spacing
+            full_text = "\n\n".join(all_transcripts)
+        else:
+            # File is small enough, transcribe directly
+            print()
+            full_text = transcribe_with_whisper(audio_file, api_key)
+        
+        output_file = save_transcript(full_text, audio_file)
+        
+        print(f"\n✅ Transkription færdig!")
         print(f"📄 Tekst gemt til: {output_file}")
-        print(f"📊 Længde: {len(text)} tegn, ~{len(text.split())} ord")
+        print(f"📊 Længde: {len(full_text)} tegn, ~{len(full_text.split())} ord")
         print()
         print("--- TRANSSKRIPTION ---")
         print()
-        print(text)
+        print(full_text)
         print()
         print("--- SLUT ---")
         
@@ -145,6 +237,11 @@ def main():
     except Exception as e:
         print(f"❌ Uventet fejl: {e}")
         sys.exit(1)
+    finally:
+        # Clean up temporary chunk files
+        if temp_dir and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+            print(f"\n🧹 Oprenset chunk-filer")
 
 if __name__ == "__main__":
     main()
